@@ -1,9 +1,11 @@
 package untyped
 
+import cats.data.Xor
 import cats.syntax.apply._
+import cats.syntax.xor._
 
 object ArithmeticAndStrings {
-  type Result = Xor[String,Value]
+  type Result[A] = Xor[String,A]
 
   sealed trait Value
   final case class Number(get: Double) extends Value
@@ -12,15 +14,26 @@ object ArithmeticAndStrings {
   sealed trait Expression {
     import Expression._
 
-    def eval: Result =
+    def eval: Result[Value] =
       this match {
         case Plus(l, r)     =>
-          (l.eval |@| r.eval){ applyBinaryNumericOp(_ + _) _ }
+          binaryNumericOp(l, r){ _ + _ }
+        case Minus(l, r)    =>
+          binaryNumericOp(l, r){ _ - _ }
         case Multiply(l, r) =>
-          (l.eval |@| r.eval){ applyBinaryNumericOp(_ * _) _ }
+          binaryNumericOp(l, r){ _ * _ }
         case Divide(l, r)   =>
-          (l.eval |@| r.eval){ applyBinaryNumericOp(_ / _) _ }
-        case v @ Value(_)   =>
+          binaryNumericOp(l, r){ _ / _ }
+
+        case Append(l, r)   =>
+          binaryCharsOp(l, r){ _ ++ _ }
+
+        case UpperCase(s)   =>
+          unaryStringOp(s){ _.toUpperCase }
+        case LowerCase(s)   =>
+          unaryStringOp(s){ _.toLowerCase }
+
+        case Literal(v)   =>
           v.right
       }
 
@@ -40,27 +53,39 @@ object ArithmeticAndStrings {
       LowerCase(this)
   }
   object Expression {
-    def applyBinaryNumericOp(op: (Double, Double) => Double)(l: Value, r: Value): Result =
-      (l, r) match {
-        case (Number(l), Number(r)) =>
-          op(l, r).right
-        case (Chars(l), _) =>
-          errors.wrongValue("Number", "Chars", l)
-        case (_, Chars(r)) =>
-          errors.wrongValue("Number", "Chars", r)
+    def checkNumber(in: Value): Result[Double] =
+      in match {
+        case Number(v) => v.right
+        case Chars(s)  => errors.wrongTag("Number", "Chars", s)
+      }
+    def checkChars(in: Value): Result[String] =
+      in match {
+        case Chars(s)  => s.right
+        case Number(v) => errors.wrongTag("Chars", "Number", v.toString)
       }
 
+    def binaryNumericOp(l: Expression, r: Expression)(op: (Double, Double) => Double): Result[Value] =
+      ((l.eval flatMap checkNumber) |@| (r.eval flatMap checkNumber)) map { (x,y) => Number(op(x, y)) }
+    def binaryCharsOp(l: Expression, r: Expression)(op: (String, String) => String): Result[Value] =
+      ((l.eval flatMap checkChars) |@| (r.eval flatMap checkChars)) map { (x,y) => Chars(op(x, y)) }
+
+    def unaryStringOp(v: Expression)(op: String => String): Result[Value] =
+      v.eval flatMap checkChars map { x => Chars(op(x)) }
+
     object errors {
-      def wrongValue(expected: String, received: String, value: String): Result =
+      def wrongTag[A](expected: String, received: String, value: String): Result[A] =
         s"""
          | Expected value with tag $expected
          | but received value $value with tag $received
-         """.trimMargin.left
+         """.stripMargin.left
     }
 
-    // Smart constructor that creates Value with type Expression
-    def value(in: Double): Expression =
-      Value(in)
+    // Smart constructors -----------
+
+    def number(in: Double): Expression =
+      Literal(Number(in))
+    def chars(in: String): Expression =
+      Literal(Chars(in))
   }
   final case class Plus(left: Expression, right: Expression) extends Expression
   final case class Minus(left: Expression, right: Expression) extends Expression
