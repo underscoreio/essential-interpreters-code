@@ -74,10 +74,8 @@ object ArithmeticAndStrings {
 
     object errors {
       def wrongTag[A](expected: String, received: String, value: String): Result[A] =
-        s"""
-         | Expected value with tag $expected
-         | but received value $value with tag $received
-         """.stripMargin.left
+        s"""|Expected value with tag $expected
+            |but received value $value with tag $received""".stripMargin.left
     }
 
     // Smart constructors -----------
@@ -95,5 +93,19 @@ object ArithmeticAndStrings {
   final case class UpperCase(string: Expression) extends Expression
   final case class LowerCase(string: Expression) extends Expression
   final case class Literal(get: Value) extends Expression
+
+  object Example {
+    def go() = {
+      import Expression._
+
+      val expr1 = number(1.0) + number(3.0) / number(2.0)
+      val expr2 = chars("Hello, ") ++ chars("world!")
+      val expr3 = (number(1.0) * number(4.0)).toUpper
+
+      println(expr1.eval)
+      println(expr2.eval)
+      println(expr3.eval)
+    }
+  }
 
 }
