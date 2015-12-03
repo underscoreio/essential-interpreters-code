@@ -5,7 +5,6 @@ import cats.syntax.apply._
 import cats.syntax.xor._
 
 object ALisp {
-  type Result[A] = Xor[String,A]
   type Environment = Map[Id,Value]
 
   final case class Id(get: String)
@@ -69,38 +68,26 @@ object ALisp {
         case Function(a, b, e) => wrongTag("Bool", "Function", s"lambda($a){$b}")
       }
   }
-
-  // refine Value to A
-  type Refinement[A] = Value => Result[A]
-  object Refinements {
+  object Infrastructure extends Infrastructure[Value] {
     import Checks._
     implicit val refineDouble: Refinement[Double] = checkNumber _
     implicit val refineString: Refinement[String] = checkChars _
     implicit val refineBoolean: Refinement[Boolean] = checkBool _
 
-    def refine[A](in: Value)(implicit r: Refinement[A]): Result[A] =
-      r(in)
-  }
-  // inject A to Value
-  type Injection[A] = A => Value
-  object Injections {
     import Expression._
     implicit val injectDouble: Injection[Double] = Number.apply _
     implicit val injectString: Injection[String] = Chars.apply _
     implicit val injectBoolean: Injection[Boolean] = Bool.apply _
-
-    def inject[A](in: A)(implicit i: Injection[A]): Value =
-      i(in)
   }
   object Lift {
-    import Refinements.refine
-    import Injections.inject
+    import Infrastructure._
+    import Infrastructure.syntax._
     import Expression._
 
     def lift[A : Refinement, B : Injection](name: String, f: A => B): Value =
       Function(
         Id("a"),
-        PrimAp1(name, Ref(Id("a")), (a: Value) => (refine(a) map (a => inject(f(a))))),
+        PrimAp1(name, Ref(Id("a")), (a: Value) => (a.refine[A] map (a => f(a).inject))),
         Environment.empty
       )
 
@@ -111,7 +98,7 @@ object ALisp {
           Function(
             Id("b"),
             PrimAp2(name, Ref(Id("a")), Ref(Id("b")), (a: Value, b: Value) =>
-              (refine[A](a) |@| refine[B](b)) map ((a,b) => inject(f(a,b)))
+              (a.refine[A] |@| b.refine[B]) map ((a,b) => f(a,b).inject)
             ),
             Environment.empty
           )
@@ -122,8 +109,7 @@ object ALisp {
 
   object Environment {
     import Lift._
-    import Refinements._
-    import Injections._
+    import Infrastructure._
 
     val empty: Environment =
       Map.empty
