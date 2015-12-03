@@ -17,3 +17,4 @@ lazy val commonSettings = Seq(
 )
 
 lazy val untyped = project.settings(commonSettings: _*)
+lazy val gadt = project.settings(commonSettings: _*)
