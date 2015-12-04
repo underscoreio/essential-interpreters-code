@@ -14,6 +14,9 @@ object HoasLisp {
   sealed trait Expression {
     def apply(arg: Expression): Expression =
       Apply(this, arg)
+
+    def apply(arg: Value): Expression =
+      Apply(this, Literal(arg))
   }
   final case class Literal(get: Value) extends Expression
   final case class Apply(f: Expression, arg: Expression) extends Expression
@@ -92,18 +95,16 @@ object HoasLisp {
     import Infrastructure.syntax._
     import Expression._
 
-    def lift[A : Refinement, B : Injection](f: A => B): Value =
-      Function { a =>
+    def lift[A : Refinement, B : Injection](f: A => B): Expression =
+      fun { a =>
         Primitive(() => a.refine[A] map (a => f(a).inject))
       }
 
-    def lift[A : Refinement, B : Refinement, C : Injection](f: (A, B) => C): Value =
-      Function { a =>
-        Literal(
-          Function { b =>
+    def lift[A : Refinement, B : Refinement, C : Injection](f: (A, B) => C): Expression =
+      fun { a =>
+          fun { b =>
             Primitive(() => (a.refine[A] |@| b.refine[B]) map ((a,b) => f(a,b).inject))
           }
-        )
       }
   }
 
@@ -113,6 +114,17 @@ object HoasLisp {
 
     val + = lift[Double,Double,Double](_ + _)
     val - = lift[Double,Double,Double](_ - _)
+    val * = lift[Double,Double,Double](_ * _)
+    val / = lift[Double,Double,Double](_ / _)
+
+    val < = lift[Double,Double,Boolean](_ < _)
+    val > = lift[Double,Double,Boolean](_ > _)
+    val == = lift[Double,Double,Boolean](_ == _)
+
+    val `number->chars` = lift[Double,String](_.toString)
+
+    val `chars-append` = lift[String,String,String](_ ++ _)
+    val `chars-length` = lift[String,Double](_.length.toDouble)
   }
 
   object Interpreter {
@@ -136,5 +148,28 @@ object HoasLisp {
         case Primitive(f) =>
           f()
       }
+  }
+
+  object Examples {
+    import Environment._
+    import Expression._
+    import Interpreter._
+
+    def square() = {
+      val sq = fun(x => *(x)(x))
+      val four = sq(number(2))
+      val nine = sq(number(3))
+
+      println(s"four is ${eval(four)}")
+      println(s"nine is ${eval(nine)}")
+    }
+
+    def conditional() = {
+      val four = perhaps(<(number(1))(number(2))){ number(4.0) }{ chars("bogus") }
+      val bogus = perhaps(>(number(1))(number(2))){ number(4.0) }{ chars("bogus") }
+
+      println(s"four is ${eval(four)}")
+      println(s"bogus is ${eval(bogus)}")
+    }
   }
 }
