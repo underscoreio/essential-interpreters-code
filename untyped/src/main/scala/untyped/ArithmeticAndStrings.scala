@@ -27,22 +27,15 @@ object ArithmeticAndStrings {
     import Refinement._
     type ValueRefinement[A] = Refinement[Value,A]
 
-    implicit object doubleRefine extends ValueRefinement[Double] {
-      def apply(in: Value): Result[Double] = {
-        in match {
-          case Number(d) => d.right
-          case v         => (Errors.wrongTag(v, "Number"))
-        }
-      }
+    def make[A](name: String)(f: PartialFunction[Value,A]): ValueRefinement[A] = {
+      val lifted = f.lift
+      (v: Value) => lifted(v).fold(Errors.wrongTag[A](v, name))(a => a.right)
     }
-    implicit object stringRefine extends ValueRefinement[String] {
-      def apply(in: Value): Result[String] = {
-        in match {
-          case Chars(s) => s.right
-          case v        => (Errors.wrongTag(v, "Chars"))
-        }
-      }
-    }
+
+    implicit val doubleRefine: ValueRefinement[Double] =
+      make[Double]("Number"){ case Number(d) => d }
+    implicit val stringRefine: ValueRefinement[String] =
+      make[String]("Chars"){ case Chars(s) => s }
   }
 
   object Injections {

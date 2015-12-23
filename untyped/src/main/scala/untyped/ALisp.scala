@@ -9,7 +9,15 @@ object ALisp {
 
   final case class Id(get: String)
 
-  sealed trait Value
+  sealed trait Value {
+    val name: String =
+      this match {
+        case Number(_) => "Number"
+        case Chars(_) => "Chars"
+        case Bool(_) => "Bool"
+        case Function(_,_,_) => "Function"
+      }
+  }
   final case class Number(get: Double) extends Value
   final case class Chars(get: String) extends Value
   final case class Bool(get: Boolean) extends Value
@@ -27,78 +35,65 @@ object ALisp {
   final case class PrimAp2(name: String, ref1: Ref, ref2: Ref, f: (Value, Value) => Result[Value]) extends Expression
 
   object Errors {
-    def wrongTag[A](expected: String, received: String, value: String): Result[A] =
+    def wrongTag[A](received: Value, expected: String): Result[A] =
       s"""|Expected value with tag $expected
-          |but received value $value with tag $received""".stripMargin.left
+          |but received value $received with tag ${received.name}""".stripMargin.left
 
     def unboundId[A](id: Id, env: Environment): Result[A] =
       s"""|There is no binding for the name ${id.get}
           |in the environment $env""".stripMargin.left
   }
 
-  object Checks {
-    import Errors._
+  object Refinements {
+    import Refinement._
+    type ValueRefinement[A] = Refinement[Value,A]
 
-    def checkNumber(in: Value): Result[Double] =
-      in match {
-        case Number(v) => v.right
-        case Chars(s) => wrongTag("Number", "Chars", s)
-        case Bool(b) => wrongTag("Number", "Bool", b.toString)
-        case Function(a, b, e) => wrongTag("Number", "Function", s"lambda($a){$b}")
-      }
-    def checkChars(in: Value): Result[String] =
-      in match {
-        case Chars(s) => s.right
-        case Number(v) => wrongTag("Chars", "Number", v.toString)
-        case Bool(b) => wrongTag("Chars", "Bool", b.toString)
-        case Function(a, b, e) => wrongTag("Chars", "Function", s"lambda($a){$b}")
-      }
-    def checkFunction(in: Value): Result[Function] =
-      in match {
-        case f @ Function(a, b, e) => f.right
-        case Chars(s) => wrongTag("Function", "Chars", s)
-        case Number(v) => wrongTag("Function", "Number", v.toString)
-        case Bool(b) => wrongTag("Function", "Bool", b.toString)
-      }
-    def checkBool(in: Value): Result[Boolean] =
-      in match {
-        case Bool(b) => b.right
-        case Chars(s) => wrongTag("Bool", "Chars", s)
-        case Number(v) => wrongTag("Bool", "Number", v.toString)
-        case Function(a, b, e) => wrongTag("Bool", "Function", s"lambda($a){$b}")
-      }
-  }
-  object Infrastructure extends Infrastructure[Value] {
-    import Checks._
-    implicit val refineDouble: Refinement[Double] = checkNumber _
-    implicit val refineString: Refinement[String] = checkChars _
-    implicit val refineBoolean: Refinement[Boolean] = checkBool _
+    def make[A](name: String)(f: PartialFunction[Value,A]): ValueRefinement[A] = {
+      val lifted = f.lift
+        (v: Value) => lifted(v).fold(Errors.wrongTag[A](v, name))(a => a.right)
+    }
 
-    import Expression._
-    implicit val injectDouble: Injection[Double] = Number.apply _
-    implicit val injectString: Injection[String] = Chars.apply _
-    implicit val injectBoolean: Injection[Boolean] = Bool.apply _
+    implicit val doubleRefine: ValueRefinement[Double] =
+      make[Double]("Number"){ case Number(d) => d }
+    implicit val stringRefine: ValueRefinement[String] =
+      make[String]("Chars"){ case Chars(s) => s }
+    implicit val boolRefine: ValueRefinement[Boolean] =
+      make[Boolean]("Bool"){ case Bool(b) => b }
+    implicit val functionRefine: ValueRefinement[Function] =
+      make[Function]("Function"){ case f @ Function(_,_,_) => f }
   }
+
+  object Injections {
+    import Injection._
+    type ValueInjection[A] = Injection[A,Value]
+
+    implicit val injectDouble: ValueInjection[Double] = Number.apply _
+    implicit val injectString: ValueInjection[String] = Chars.apply _
+    implicit val injectBoolean: ValueInjection[Boolean] = Bool.apply _
+  }
+
   object Lift {
-    import Infrastructure._
-    import Infrastructure.syntax._
     import Expression._
+    import Refinement._
+    import Refinements._
+    import Injection._
+    import Injections._
 
-    def lift[A : Refinement, B : Injection](name: String, f: A => B): Value =
+    def lift[A : ValueRefinement, B : ValueInjection](name: String, f: A => B): Value =
       Function(
         Id("a"),
-        PrimAp1(name, Ref(Id("a")), (a: Value) => (a.refine[A] map (a => f(a).inject))),
+        PrimAp1(name, Ref(Id("a")), (a: Value) => (a.refine[A] map (a => f(a).inject[B]))),
         Environment.empty
       )
 
-    def lift[A : Refinement, B : Refinement, C : Injection](name: String, f: (A, B) => C): Value =
+    def lift[A : ValueRefinement, B : ValueRefinement, C : ValueInjection](name: String, f: (A, B) => C): Value =
       Function(
         Id("a"),
         Literal(
           Function(
             Id("b"),
             PrimAp2(name, Ref(Id("a")), Ref(Id("b")), (a: Value, b: Value) =>
-              (a.refine[A] |@| b.refine[B]) map ((a,b) => f(a,b).inject)
+              (a.refine[A] |@| b.refine[B]) map ((a,b) => f(a,b).inject[C])
             ),
             Environment.empty
           )
@@ -109,14 +104,17 @@ object ALisp {
 
   object Environment {
     import Lift._
-    import Infrastructure._
+    import Refinement._
+    import Refinements._
+    import Injection._
+    import Injections._
 
     val empty: Environment =
       Map.empty
 
-    def primitive1[A: Refinement, B: Injection](name: String)(f: A => B) =
+    def primitive1[A: ValueRefinement, B: ValueInjection](name: String)(f: A => B) =
       Id(name) -> lift(name, f)
-    def primitive2[A: Refinement,B: Refinement,C: Injection](name: String)(f: (A,B) => C) =
+    def primitive2[A: ValueRefinement,B: ValueRefinement,C: ValueInjection](name: String)(f: (A,B) => C) =
       Id(name) -> lift(name, f)
 
     val initial: Environment =
@@ -162,7 +160,8 @@ object ALisp {
 
   object Interpreter {
     import Environment._
-    import Checks._
+    import Refinement._
+    import Refinements._
 
     def eval(expr: Expression, env: Environment = Environment.initial): Result[Value] =
       expr match {
@@ -181,12 +180,12 @@ object ALisp {
         case Apply(fExpr, argExpr) =>
           for {
             arg <- eval(argExpr, env)
-            f   <- eval(fExpr, env) flatMap (checkFunction _)
+            f   <- eval(fExpr, env) flatMap (v => v.refine[Function])
             v   <- eval(f.body, env ++ f.env + (f.arg -> arg))
           } yield v
         case If(c, t, e) =>
           for {
-            bool <- eval(c, env) flatMap (checkBool _)
+            bool <- eval(c, env) flatMap (v => v.refine[Boolean])
             v    <- if(bool) eval(t, env) else eval(e, env)
           } yield v
         case PrimAp1(n, r, f) =>

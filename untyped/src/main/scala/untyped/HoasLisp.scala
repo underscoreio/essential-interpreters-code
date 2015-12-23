@@ -5,7 +5,15 @@ import cats.syntax.apply._
 import cats.syntax.xor._
 
 object HoasLisp {
-  sealed trait Value
+  sealed trait Value {
+    val name: String =
+      this match {
+        case Number(_)   => "Number"
+        case Chars(_)    => "Chars"
+        case Bool(_)     => "Bool"
+        case Function(_) => "Function"
+      }
+  }
   final case class Number(get: Double) extends Value
   final case class Chars(get: String) extends Value
   final case class Bool(get: Boolean) extends Value
@@ -41,76 +49,65 @@ object HoasLisp {
   }
 
   object Errors {
-    def wrongTag[A](expected: String, received: String, value: String): Result[A] =
+    def wrongTag[A](received: Value, expected: String): Result[A] =
       s"""|Expected value with tag $expected
-          |but received value $value with tag $received""".stripMargin.left
+          |but received value $received with tag ${received.name}""".stripMargin.left
   }
 
-  object Checks {
-    import Errors._
+  object Refinements {
+    import Refinement._
+    type ValueRefinement[A] = Refinement[Value,A]
 
-    def name(in: Value): String =
-      in match {
-        case Number(_)   => "Number"
-        case Chars(_)    => "Chars"
-        case Bool(_)     => "Bool"
-        case Function(_) => "Function"
-      }
+    def make[A](name: String)(f: PartialFunction[Value,A]): ValueRefinement[A] = {
+      val lifted = f.lift
+        (v: Value) => lifted(v).fold(Errors.wrongTag[A](v, name))(a => a.right)
+    }
 
-    def checkNumber(in: Value): Result[Double] =
-      in match {
-        case Number(v) => v.right
-        case other     => wrongTag("Number", name(other), other.toString)
-      }
-    def checkChars(in: Value): Result[String] =
-      in match {
-        case Chars(s) => s.right
-        case other    => wrongTag("Chars", name(other), other.toString)
-      }
-    def checkFunction(in: Value): Result[Value => Expression] =
-      in match {
-        case Function(f) => f.right
-        case other       => wrongTag("Function", name(other), other.toString)
-      }
-    def checkBool(in: Value): Result[Boolean] =
-      in match {
-        case Bool(b) => b.right
-        case other   => wrongTag("Bool", name(other), other.toString)
-      }
+    implicit val doubleRefine: ValueRefinement[Double] =
+      make[Double]("Number"){ case Number(d) => d }
+    implicit val stringRefine: ValueRefinement[String] =
+      make[String]("Chars"){ case Chars(s) => s }
+    implicit val boolRefine: ValueRefinement[Boolean] =
+      make[Boolean]("Bool"){ case Bool(b) => b }
+    implicit val functionRefine: ValueRefinement[Value => Expression] =
+      make[Value => Expression]("Function"){ case Function(f) => f }
   }
-  object Infrastructure extends Infrastructure[Value] {
-    import Checks._
-    implicit val refineDouble: Refinement[Double] = checkNumber _
-    implicit val refineString: Refinement[String] = checkChars _
-    implicit val refineBoolean: Refinement[Boolean] = checkBool _
 
-    import Expression._
-    implicit val injectDouble: Injection[Double] = Number.apply _
-    implicit val injectString: Injection[String] = Chars.apply _
-    implicit val injectBoolean: Injection[Boolean] = Bool.apply _
+  object Injections {
+    import Injection._
+    type ValueInjection[A] = Injection[A,Value]
+
+    implicit val injectDouble: ValueInjection[Double] = Number.apply _
+    implicit val injectString: ValueInjection[String] = Chars.apply _
+    implicit val injectBoolean: ValueInjection[Boolean] = Bool.apply _
   }
 
   object Lift {
-    import Infrastructure._
-    import Infrastructure.syntax._
     import Expression._
+    import Refinement._
+    import Refinements._
+    import Injection._
+    import Injections._
 
-    def lift[A : Refinement, B : Injection](f: A => B): Expression =
+    def lift[A : ValueRefinement, B : ValueInjection](f: A => B): Expression =
       fun { a =>
-        Primitive(() => a.refine[A] map (a => f(a).inject))
+        Primitive(() => a.refine[A] map (a => f(a).inject[B]))
       }
 
-    def lift[A : Refinement, B : Refinement, C : Injection](f: (A, B) => C): Expression =
+    def lift[A : ValueRefinement, B : ValueRefinement, C : ValueInjection](f: (A, B) => C): Expression =
       fun { a =>
           fun { b =>
-            Primitive(() => (a.refine[A] |@| b.refine[B]) map ((a,b) => f(a,b).inject))
+            Primitive(() => (a.refine[A] |@| b.refine[B]) map ((a,b) => f(a,b).inject[C]))
           }
       }
   }
 
   object Environment {
-    import Infrastructure._
     import Lift._
+    import Refinement._
+    import Refinements._
+    import Injection._
+    import Injections._
 
     val + = lift[Double,Double,Double](_ + _)
     val - = lift[Double,Double,Double](_ - _)
@@ -128,8 +125,10 @@ object HoasLisp {
   }
 
   object Interpreter {
-    import Checks._
-    import Infrastructure._
+    import Refinement._
+    import Refinements._
+    import Injection._
+    import Injections._
 
     def eval(expr: Expression): Result[Value] =
       expr match {
@@ -137,12 +136,12 @@ object HoasLisp {
         case Apply(fExpr, argExpr) =>
           for {
             arg <- eval(argExpr)
-            f   <- eval(fExpr) flatMap (checkFunction _)
+            f   <- eval(fExpr) flatMap (v => v.refine[Value => Expression])
             v   <- eval(f(arg))
           } yield v
         case If(c, t, e) =>
           for {
-            bool <- eval(c) flatMap (checkBool _)
+            bool <- eval(c) flatMap (v => v.refine[Boolean])
             v    <- if(bool) eval(t) else eval(e)
           } yield v
         case Primitive(f) =>
