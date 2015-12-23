@@ -7,31 +7,99 @@ import cats.syntax.xor._
 object ArithmeticAndStrings {
   type Result[A] = Xor[String,A]
 
-  sealed trait Value
+  sealed trait Value {
+    val name: String =
+      this match {
+        case Number(_) => "Number"
+        case Chars(_) => "Chars"
+      }
+  }
   final case class Number(get: Double) extends Value
   final case class Chars(get: String) extends Value
 
+  object Errors {
+    def wrongTag[A](received: Value, expected: String): Result[A] =
+      s"""|Expected value with tag $expected
+          |but received value $received with tag ${received.name}""".stripMargin.left
+  }
+
+  object Refinements {
+    import Refinement._
+    type ValueRefinement[A] = Refinement[Value,A]
+
+    implicit object doubleRefine extends ValueRefinement[Double] {
+      def apply(in: Value): Result[Double] = {
+        in match {
+          case Number(d) => d.right
+          case v         => (Errors.wrongTag(v, "Number"))
+        }
+      }
+    }
+    implicit object stringRefine extends ValueRefinement[String] {
+      def apply(in: Value): Result[String] = {
+        in match {
+          case Chars(s) => s.right
+          case v        => (Errors.wrongTag(v, "Chars"))
+        }
+      }
+    }
+  }
+
+  object Injections {
+    import Injection._
+    type ValueInjection[A] = Injection[A,Value]
+
+    implicit val injectDouble: ValueInjection[Double] = Number.apply _
+    implicit val injectString: ValueInjection[String] = Chars.apply _
+  }
+
+  object Lift {
+    import Expression._
+    import Refinement._
+    import Refinements._
+    import Injection._
+    import Injections._
+
+    def apply[A: ValueRefinement, B: ValueInjection](a: Value)(f: A => B): Result[Value] =
+      (a.refine[A] map (a => f(a).inject[B]))
+
+    def apply[A: ValueRefinement, B: ValueRefinement, C: ValueInjection](a: Value, b: Value)(f: (A, B) => C): Result[Value] =
+      (a.refine[A] |@| b.refine[B]) map ((a,b) => f(a,b).inject[C])
+  }
+
   sealed trait Expression {
     import Expression._
+    import Injections._
+    import Refinements._
 
     def eval: Result[Value] =
       this match {
         case Plus(l, r)     =>
-          binaryNumericOp(l, r){ _ + _ }
+          (l.eval |@| r.eval).tupled flatMap { case (a,b) =>
+            Lift.apply[Double,Double,Double](a,b){ _ + _ }
+          }
         case Minus(l, r)    =>
-          binaryNumericOp(l, r){ _ - _ }
+          (l.eval |@| r.eval).tupled flatMap { case (a,b) =>
+            Lift.apply[Double,Double,Double](a,b){ _ - _ }
+          }
         case Multiply(l, r) =>
-          binaryNumericOp(l, r){ _ * _ }
+          (l.eval |@| r.eval).tupled flatMap { case (a,b) =>
+            Lift.apply[Double,Double,Double](a,b){ _ * _ }
+          }
         case Divide(l, r)   =>
-          binaryNumericOp(l, r){ _ / _ }
+          (l.eval |@| r.eval).tupled flatMap { case (a,b) =>
+            Lift.apply[Double,Double,Double](a,b){ _ / _ }
+          }
 
         case Append(l, r)   =>
-          binaryCharsOp(l, r){ _ ++ _ }
+          (l.eval |@| r.eval).tupled flatMap { case (a,b) =>
+            Lift.apply[String,String,String](a,b){ _ ++ _ }
+          }
 
         case UpperCase(s)   =>
-          unaryStringOp(s){ _.toUpperCase }
+          s.eval flatMap { a => Lift.apply[String,String](a){ _.toUpperCase } }
         case LowerCase(s)   =>
-          unaryStringOp(s){ _.toLowerCase }
+          s.eval flatMap { a => Lift.apply[String,String](a){ _.toLowerCase } }
 
         case Literal(v)   =>
           v.right
@@ -53,31 +121,6 @@ object ArithmeticAndStrings {
       LowerCase(this)
   }
   object Expression {
-    def checkNumber(in: Value): Result[Double] =
-      in match {
-        case Number(v) => v.right
-        case Chars(s)  => errors.wrongTag("Number", "Chars", s)
-      }
-    def checkChars(in: Value): Result[String] =
-      in match {
-        case Chars(s)  => s.right
-        case Number(v) => errors.wrongTag("Chars", "Number", v.toString)
-      }
-
-    def binaryNumericOp(l: Expression, r: Expression)(op: (Double, Double) => Double): Result[Value] =
-      ((l.eval flatMap checkNumber) |@| (r.eval flatMap checkNumber)) map { (x,y) => Number(op(x, y)) }
-    def binaryCharsOp(l: Expression, r: Expression)(op: (String, String) => String): Result[Value] =
-      ((l.eval flatMap checkChars) |@| (r.eval flatMap checkChars)) map { (x,y) => Chars(op(x, y)) }
-
-    def unaryStringOp(v: Expression)(op: String => String): Result[Value] =
-      v.eval flatMap checkChars map { x => Chars(op(x)) }
-
-    object errors {
-      def wrongTag[A](expected: String, received: String, value: String): Result[A] =
-        s"""|Expected value with tag $expected
-            |but received value $value with tag $received""".stripMargin.left
-    }
-
     // Smart constructors -----------
 
     def number(in: Double): Expression =

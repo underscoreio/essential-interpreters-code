@@ -3,7 +3,6 @@ package untyped
 import cats.data.Xor
 
 object Refinement {
-  type Result[A] = Xor[String,A]
   type Refinement[I,O] = I => Result[O]
 
   implicit class RefinementOps[I](in: I) {
