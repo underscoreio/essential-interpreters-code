@@ -1,7 +1,8 @@
 lazy val cats = "org.spire-math" %% "cats" % "0.3.0"
+lazy val scalaCheck = "org.scalacheck" %% "scalacheck" % "1.12.5" % "test"
 
 lazy val commonSettings = Seq(
-  libraryDependencies ++= Seq(cats),
+  libraryDependencies ++= Seq(cats, scalaCheck),
   scalaVersion := "2.11.7",
   scalacOptions := Seq(
     "-deprecation",
