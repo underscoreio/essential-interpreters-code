@@ -53,10 +53,10 @@ object ArithmeticAndStrings {
     import Injection._
     import Injections._
 
-    def apply[A: ValueRefinement, B: ValueInjection](a: Value)(f: A => B): Result[Value] =
+    def apply[A: ValueRefinement, B: ValueInjection](f: A => B)(a: Value): Result[Value] =
       (a.refine[A] map (a => f(a).inject[B]))
 
-    def apply[A: ValueRefinement, B: ValueRefinement, C: ValueInjection](a: Value, b: Value)(f: (A, B) => C): Result[Value] =
+    def apply[A: ValueRefinement, B: ValueRefinement, C: ValueInjection](f: (A, B) => C)(a: Value, b: Value): Result[Value] =
       (a.refine[A] |@| b.refine[B]) map ((a,b) => f(a,b).inject[C])
   }
 
@@ -68,31 +68,31 @@ object ArithmeticAndStrings {
     def eval: Result[Value] =
       this match {
         case Plus(l, r)     =>
-          (l.eval |@| r.eval).tupled flatMap { case (a,b) =>
-            Lift.apply[Double,Double,Double](a,b){ _ + _ }
+          (l.eval |@| r.eval).tupled flatMap {
+            (Lift.apply[Double,Double,Double]{ _ + _ } _).tupled
           }
         case Minus(l, r)    =>
-          (l.eval |@| r.eval).tupled flatMap { case (a,b) =>
-            Lift.apply[Double,Double,Double](a,b){ _ - _ }
+          (l.eval |@| r.eval).tupled flatMap {
+            (Lift.apply[Double,Double,Double]{ _ - _ } _).tupled
           }
         case Multiply(l, r) =>
-          (l.eval |@| r.eval).tupled flatMap { case (a,b) =>
-            Lift.apply[Double,Double,Double](a,b){ _ * _ }
+          (l.eval |@| r.eval).tupled flatMap {
+            (Lift.apply[Double,Double,Double]{ _ * _ } _).tupled
           }
         case Divide(l, r)   =>
-          (l.eval |@| r.eval).tupled flatMap { case (a,b) =>
-            Lift.apply[Double,Double,Double](a,b){ _ / _ }
+          (l.eval |@| r.eval).tupled flatMap {
+            (Lift.apply[Double,Double,Double]{ _ / _ } _).tupled
           }
 
         case Append(l, r)   =>
-          (l.eval |@| r.eval).tupled flatMap { case (a,b) =>
-            Lift.apply[String,String,String](a,b){ _ ++ _ }
+          (l.eval |@| r.eval).tupled flatMap {
+            (Lift.apply[String,String,String]{ _ ++ _ } _).tupled
           }
 
         case UpperCase(s)   =>
-          s.eval flatMap { a => Lift.apply[String,String](a){ _.toUpperCase } }
+          s.eval flatMap { Lift.apply[String,String]{ _.toUpperCase } _ }
         case LowerCase(s)   =>
-          s.eval flatMap { a => Lift.apply[String,String](a){ _.toLowerCase } }
+          s.eval flatMap { Lift.apply[String,String]{ _.toLowerCase } _ }
 
         case Literal(v)   =>
           v.right
